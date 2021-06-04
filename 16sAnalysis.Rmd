@@ -1,0 +1,37 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+dada installation
+
+```{r dada}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+BiocManager::install("dada2")
+```
+
+
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+BiocManager::install("phyloseq")
+```
+
+```{r}
+install.packages(c("tidyverse", "digest"))
+```
+```{r}
+library(dada2)
+library(phyloseq)
+library(tidyverse)
+library(digest)
+
+```
+
+
+```{r}
+samples = read_tsv("data/samples.tsv", col_types = 'cff')
+glimpse(samples)
+```
+
