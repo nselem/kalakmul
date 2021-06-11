@@ -8,19 +8,16 @@ dada installation
 if (!requireNamespace("BiocManager", quietly = TRUE))
 install.packages("BiocManager")
 BiocManager::install("dada2")
-```
 
-
-
-```{r}
 if (!requireNamespace("BiocManager", quietly = TRUE))
 install.packages("BiocManager")
 BiocManager::install("phyloseq")
-```
 
-```{r}
 install.packages(c("tidyverse", "digest"))
 ```
+
+
+
 ```{r}
 library(dada2)
 library(phyloseq)
@@ -33,5 +30,204 @@ library(digest)
 ```{r}
 samples = read_tsv("data/samples.tsv", col_types = 'cff')
 glimpse(samples)
+
+path = "data/original"
+list.files(path)
+```
+The forward reads:
+
+```{r}
+
+forward.original = sort(list.files(path, pattern="1.fastq.gz", full.names = TRUE))
+head(forward.original)
+```
+The reverse reads:
+```{r}
+
+reverse.original = sort(list.files(path, pattern="2.fastq.gz", full.names = TRUE))
+head(reverse.original)
+
+```
+name extraction
+```{r}
+
+sample.names = sapply(strsplit(basename(forward.original), "_R"), `[`, 1)
+head(sample.names)
+```
+```{r}
+plotQualityProfile(forward.original[1:2])
+```
+```{r}
+plotQualityProfile(reverse.original[1:2])
+
+```
+```{r}
+forward.filtered = file.path("data/filtered", paste0(sample.names, ".1.filtered.fastq.gz"))
+reverse.filtered = file.path("data/filtered", paste0(sample.names, ".2.filtered.fastq.gz"))
+
+names(forward.filtered) = sample.names
+names(reverse.filtered) = sample.names
+```
+
+Forwar errors
+```{r}
+out = filterAndTrim(forward.original, forward.filtered, 
+                    reverse.original, reverse.filtered,
+                    minLen = 150, # Pretty stringent but to show difference between the in and out
+                    multithread = TRUE) # In case of Windows OS, multithread should be FALSE (which is the default)
+head(out)
+```
+
+```{r}
+forward.errors = learnErrors(forward.filtered, multithread = TRUE)
+plotErrors(forward.errors, nominalQ = TRUE) # Plot observed frequency of each transition
+
+```
+```{r}
+reverse.errors = learnErrors(reverse.filtered, multithread = TRUE)
+plotErrors(reverse.errors, nominalQ = TRUE) # Plot observed frequency of each transition
+
+```
+
+## Sample inference 
+Forward Sample Inference
+
+```{r}
+forward.dada = dada(forward.filtered, err = forward.errors, multithread = TRUE)
+head(forward.dada)
+
+```
+
+
+```{r}
+reverse.dada = dada(reverse.filtered, err = reverse.errors, multithread = TRUE)
+head(reverse.dada)
+
+
+```
+
+Merge Paired Reads
+```{r}
+
+mergers = mergePairs(forward.dada, forward.filtered, reverse.dada, reverse.filtered, verbose = TRUE)
+head(mergers[[1]]) # Inspect the merger data.frame of the first sample
+
+
+```
+
+Construct Sequence Table
+```{r}
+
+seqtab = makeSequenceTable(mergers)
+dim(seqtab)
+```
+
+Removal of Chimeras
+```{r}
+seqtab.nochim = removeBimeraDenovo(seqtab,
+                                   multithread = TRUE,
+                                   verbose = TRUE)
+dim(seqtab.nochim)
+
+```
+
+Track reads through the pipeline
+```{r}
+getN = function(x) sum(getUniques(x))
+track = cbind(out, sapply(forward.dada, getN), sapply(reverse.dada, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+```
+
+```{r}
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(forward.dada, getN) with getN(forward.dada)
+colnames(track) = c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) = sample.names
+head(track)
+```
+
+Taxonomic Classification
+```{r}
+
+taxa = assignTaxonomy(seqtab.nochim,
+                      "data/silva/silva_nr99_v138_train_set.fa.gz", 
+                      multithread = TRUE,
+                      verbose = TRUE)
+head(taxa)
+
+```
+
+
+Assign Species
+```{r}
+taxa = addSpecies(taxa, "data/silva/silva_species_assignment_v138.fa.gz")
+head(taxa)
+```
+
+Digest ASVs
+```{r}
+md5 = lapply(colnames(seqtab.nochim), digest)
+colnames(seqtab.nochim) = md5
+
+otus = as.matrix(seqtab.nochim)
+colnames(otus) = md5
+otus[1:2, 1:2]
+```
+
+```{r}
+rownames(taxa) = lapply(rownames(taxa), digest)
+head(taxa)
+```
+Import into phyloseq:
+```{r}
+samples = as.data.frame(samples)
+row.names(samples) = samples$sample
+samples
+```
+
+```{r}
+ps = phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),  sample_data(samples),  tax_table(taxa))
+ps
+```
+
+```{r}
+plot_richness(ps, x="status", measures=c("Shannon", "Simpson"), color = "pair")
+
+```
+
+```{r}
+ps_rank = transform_sample_counts(ps, threshrankfun(50))
+ps_log = transform_sample_counts(ps, log)
+ps_norm = transform_sample_counts(ps, function(x) x / sum(x))
+```
+
+Ordinate
+```{r}
+ord.nmds.bray = ordinate(ps_norm, method="NMDS", distance="bray")
+
+```
+
+```{r}
+plot_ordination(ps, ord.nmds.bray, color="status", title="Bray NMDS") + geom_point(size = 3)
+
+```
+
+Bar plot
+```{r}
+ps
+ps_norm  = transform_sample_counts(ps, function(x) x / sum(x) )
+ps_filtered = filter_taxa(ps_norm, function(x) mean(x) > 1e-3, prune = TRUE)
+ps_filtered
+
+```
+
+```{r}
+plot_bar(ps_filtered, x="status", fill="Phylum") + geom_bar(aes(fill=Phylum), stat="identity", position="stack", color = "white")
+```
+
+
+```{r}
+total = median(sample_sums(ps))
+standf = function(x, t=total) round(t * (x / sum(x)))
+ps2 = transform_sample_counts(ps, standf)
+ps2
 ```
 
